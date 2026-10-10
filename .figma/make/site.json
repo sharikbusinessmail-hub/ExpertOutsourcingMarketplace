@@ -1,0 +1,10 @@
+{
+  "description": "Connect with local experts and influencers for on-demand services, from tech support to home repairs, enabling users to outsource their skills effortlessly.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

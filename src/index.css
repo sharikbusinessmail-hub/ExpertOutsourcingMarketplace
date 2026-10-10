@@ -1,0 +1,20 @@
+@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700&family=Noto+Sans+Tamil:wght@400;600;700&display=swap');
+@import 'leaflet/dist/leaflet.css';
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Figtree', 'Noto Sans Sinhala', 'Noto Sans Tamil', system-ui, sans-serif;
+  --color-cream: #f3efe8;
+  --color-ink: #1a1714;
+  --color-flame: #ec5a12;
+  --color-flame-soft: #fde6d8;
+  --color-teal: #0f7a6c;
+  --color-line: #e7e1d7;
+}
+body { background: #1a1714; color: var(--color-ink); font-family: var(--font-sans); }
+.leaflet-container { font-family: var(--font-sans); background: #efe9df; }
+.pin { background: none; border: none; }
+@keyframes pulse-ring { 0%{transform:scale(.5);opacity:.6} 100%{transform:scale(2.6);opacity:0} }
+.ring-pulse { animation: pulse-ring 2s ease-out infinite; }
+@keyframes rise { from{transform:translateY(12px);opacity:0} to{transform:none;opacity:1} }
+.rise { animation: rise .35s ease-out both; }
