@@ -18,3 +18,12 @@ body { background: #1a1714; color: var(--color-ink); font-family: var(--font-san
 .ring-pulse { animation: pulse-ring 2s ease-out infinite; }
 @keyframes rise { from{transform:translateY(12px);opacity:0} to{transform:none;opacity:1} }
 .rise { animation: rise .35s ease-out both; }
+
+/* Fit every phone: dynamic viewport height with a 100vh fallback, safe areas, no iOS input zoom. */
+html, body, #root { height: 100%; overscroll-behavior: none; }
+body { overflow: hidden; -webkit-text-size-adjust: 100%; }
+.app-h { height: 100vh; height: 100dvh; min-height: -webkit-fill-available; }
+@media (min-width: 640px) { .phone-frame { height: 844px; min-height: 0; } }
+.safe-bottom { bottom: calc(1rem + env(safe-area-inset-bottom)); }
+.safe-pad { padding-bottom: calc(7rem + env(safe-area-inset-bottom)); }
+@media (max-width: 639px) { input, select, textarea { font-size: 16px !important; } }
