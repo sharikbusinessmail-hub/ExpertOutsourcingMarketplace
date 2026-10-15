@@ -48,7 +48,7 @@ jobs:
 
       - name: 10. Inject Permissions
         run: |
-          cat << 'EOF' > inject-perms.js
+          cat << 'EOF' > inject-perms.cjs
           const fs = require('fs');
           const file = 'android/app/src/main/AndroidManifest.xml';
           let xml = fs.readFileSync(file, 'utf8');
@@ -63,8 +63,8 @@ jobs:
             fs.writeFileSync(file, xml);
           }
           EOF
-          node inject-perms.js
-
+          node inject-perms.cjs
+          
       - name: 11. Compile Android APK
         run: |
           cd android
