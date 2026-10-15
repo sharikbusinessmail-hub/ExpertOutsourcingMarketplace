@@ -7,31 +7,34 @@ on:
 
 jobs:
   build-android:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Fixes the ubuntu-latest migration notice
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5 # Fixes Node 20 deprecation warning
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5 # Fixes Node 20 deprecation warning
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5 # Fixes Node 20 deprecation warning
         with:
           node-version: 22
           cache: 'pnpm'
 
       - name: Set up Java JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5 # Fixes setup-java v4 deprecation warning
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Install dependencies and build web app
+      - name: Install Capacitor and build web app
         run: |
           pnpm install --no-frozen-lockfile
+          # Force install plugins so the build and CLI never fail
+          pnpm add @capacitor/core @capacitor/android @capacitor/geolocation @capacitor/local-notifications @capacitor/push-notifications
+          pnpm add -D @capacitor/cli
           pnpm run build
 
       - name: Create native Android project
@@ -40,11 +43,23 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Inject Android GPS and Notification Permissions
+      - name: Inject Android GPS and Notification Permissions safely
+        # Using EOF prevents bash from misinterpreting quotes and backticks (fixes exit code 1)
         run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          PERMISSIONS='    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-feature android:name="android.hardware.location.gps" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
-          sed -i "/<manifest/a $PERMISSIONS" "$MANIFEST"
+          cat << 'EOF' > inject-perms.js
+          const fs = require('fs');
+          const file = 'android/app/src/main/AndroidManifest.xml';
+          let xml = fs.readFileSync(file, 'utf8');
+          const perms = `
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-feature android:name="android.hardware.location.gps" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+          `;
+          xml = xml.replace('</manifest>', perms + '\n</manifest>');
+          fs.writeFileSync(file, xml);
+          EOF
+          node inject-perms.js
 
       - name: Compile Android APK
         run: |
