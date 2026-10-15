@@ -1,0 +1,55 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Set up Java JDK 21 (Required for Android)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install dependencies and build web app
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm run build
+
+      - name: Wrap with Capacitor and create Android project
+        run: |
+          pnpm add @capacitor/core @capacitor/android
+          pnpm add -D @capacitor/cli
+          WEB_DIR=$( [ -d "dist" ] && echo "dist" || echo "build" )
+          npx cap init "Atha" "com.atha.marketplace" --web-dir "$WEB_DIR"
+          npx cap add android
+
+      - name: Compile Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload Downloadable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Atha-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
