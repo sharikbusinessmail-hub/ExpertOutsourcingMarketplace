@@ -7,24 +7,26 @@ on:
 
 jobs:
   build-android:
-    runs-on: ubuntu-24.04 # Fixes the ubuntu-latest migration notice
+    runs-on: ubuntu-latest
+    env:
+      CI: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5 # Fixes Node 20 deprecation warning
+        uses: actions/checkout@v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v5 # Fixes Node 20 deprecation warning
+        uses: pnpm/action-setup@v4
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5 # Fixes Node 20 deprecation warning
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'pnpm'
 
       - name: Set up Java JDK 21
-        uses: actions/setup-java@v5 # Fixes setup-java v4 deprecation warning
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -32,32 +34,37 @@ jobs:
       - name: Install Capacitor and build web app
         run: |
           pnpm install --no-frozen-lockfile
-          # Force install plugins so the build and CLI never fail
+          # Ensure plugins are installed in the cloud
           pnpm add @capacitor/core @capacitor/android @capacitor/geolocation @capacitor/local-notifications @capacitor/push-notifications
           pnpm add -D @capacitor/cli
           pnpm run build
 
       - name: Create native Android project
         run: |
-          npx cap init "Atha" "com.atha.marketplace" --web-dir dist
-          npx cap add android
+          # Generate capacitor.config and the android folder automatically
+          npx cap init "Atha" "com.atha.marketplace" --web-dir dist || true
+          npx cap add android || true
           npx cap sync android
 
-      - name: Inject Android GPS and Notification Permissions safely
-        # Using EOF prevents bash from misinterpreting quotes and backticks (fixes exit code 1)
+      - name: Inject Android GPS and Notification Permissions
         run: |
           cat << 'EOF' > inject-perms.js
           const fs = require('fs');
           const file = 'android/app/src/main/AndroidManifest.xml';
-          let xml = fs.readFileSync(file, 'utf8');
-          const perms = `
-              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-              <uses-feature android:name="android.hardware.location.gps" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-          `;
-          xml = xml.replace('</manifest>', perms + '\n</manifest>');
-          fs.writeFileSync(file, xml);
+          
+          if (fs.existsSync(file)) {
+            let xml = fs.readFileSync(file, 'utf8');
+            if (!xml.includes('android.permission.ACCESS_FINE_LOCATION')) {
+              const perms = `
+                  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+                  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+                  <uses-feature android:name="android.hardware.location.gps" />
+                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              `;
+              xml = xml.replace('</manifest>', perms + '\n</manifest>');
+              fs.writeFileSync(file, xml);
+            }
+          }
           EOF
           node inject-perms.js
 
