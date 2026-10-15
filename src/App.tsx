@@ -586,20 +586,22 @@ function MainApp({ t, lang, setLang, me, setMe, logout }: { t: Dict; lang: Lang;
     const ping = () => api("/ping", { method: "POST" }).catch(() => {});
     ping(); const x = setInterval(ping, 60000);
     window.addEventListener("pagehide", ping);
-    try { if (Capacitor.isNativePlatform()) {
-  LocalNotifications.requestPermissions().catch(() => {});
-  PushNotifications.requestPermissions().then(result => {
-    if (result.receive === "granted") {
-      PushNotifications.register();
-    }
-  }).catch(() => {});
-} else {
-  try {
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission()?.catch?.(() => {});
-    }
-  } catch { /* unsupported */ }
-}
+    try {
+      if (Capacitor.isNativePlatform()) {
+        LocalNotifications.requestPermissions().catch(() => {});
+        PushNotifications.requestPermissions().then(result => {
+          if (result.receive === "granted") {
+            PushNotifications.register();
+          }
+        }).catch(() => {});
+      } else {
+        try {
+          if ("Notification" in window && Notification.permission === "default") {
+            Notification.requestPermission()?.catch?.(() => {});
+          }
+        } catch { /* unsupported */ }
+      }
+    } catch { /* unsupported */ }
     return () => { supabase.removeChannel(inbox); supabase.removeChannel(presence); clearInterval(x); window.removeEventListener("pagehide", ping); ping(); };
   }, [me.id, refresh]);
 
