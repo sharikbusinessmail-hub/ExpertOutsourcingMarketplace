@@ -15,7 +15,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -23,7 +23,7 @@ jobs:
           node-version: 22
           cache: 'pnpm'
 
-      - name: Set up Java JDK 21 (Required for Android)
+      - name: Set up Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -34,13 +34,17 @@ jobs:
           pnpm install --no-frozen-lockfile
           pnpm run build
 
-      - name: Wrap with Capacitor and create Android project
+      - name: Create native Android project
         run: |
-          pnpm add @capacitor/core @capacitor/android
-          pnpm add -D @capacitor/cli
-          WEB_DIR=$( [ -d "dist" ] && echo "dist" || echo "build" )
-          npx cap init "Atha" "com.atha.marketplace" --web-dir "$WEB_DIR"
+          npx cap init "Atha" "com.atha.marketplace" --web-dir dist
           npx cap add android
+          npx cap sync android
+
+      - name: Inject Android GPS and Notification Permissions
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          PERMISSIONS='    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-feature android:name="android.hardware.location.gps" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+          sed -i "/<manifest/a $PERMISSIONS" "$MANIFEST"
 
       - name: Compile Android APK
         run: |
