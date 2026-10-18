@@ -1,3 +1,7 @@
+import { Capacitor } from "@capacitor/core";
+import { Geolocation } from "@capacitor/geolocation";
+import { LocalNotifications } from "@capacitor/local-notifications";
+import { PushNotifications } from "@capacitor/push-notifications";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import { MapContainer, TileLayer, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -99,7 +103,29 @@ class Boundary extends Component<{ children: ReactNode; onReset?: () => void }, 
 }
 
 // `new Notification()` throws on Android Chrome; use the service-worker path when available.
-function systemNotify(title: string, body: string) {
+async function systemNotify(title: string, body: string) {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title,
+            body,
+            id: Math.floor(Math.random() * 100000),
+            schedule: { at: new Date(Date.now() + 100) },
+            sound: undefined,
+            actionTypeId: "",
+            extra: null,
+          },
+        ],
+      });
+    } catch (e) {
+      console.log("Native local notification failed", e);
+    }
+    return;
+  }
+
+  // Web browser fallback
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try { new Notification(title, { body }); }
   catch { navigator.serviceWorker?.getRegistration().then(r => r?.showNotification(title, { body })).catch(() => {}); }
@@ -610,26 +636,62 @@ function useLocation(city: string) {
   const fallback = CITIES[city] ?? CITIES.Colombo;
   const [loc, setLoc] = useState<Loc>({ ll: fallback, source: "city" });
   const [perm, setPerm] = useState<GeoState>("unknown");
-  const watch = useRef<number | null>(null);
-  const start = useCallback(() => {
+  const watch = useRef<string | number | null>(null);
+
+  const start = useCallback(async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const req = await Geolocation.requestPermissions();
+        if (req.location === "granted") {
+          setPerm("granted");
+          const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 });
+          setLoc({ ll: [pos.coords.latitude, pos.coords.longitude], source: "gps" });
+
+          if (watch.current) await Geolocation.clearWatch({ id: String(watch.current) });
+          const id = await Geolocation.watchPosition({ enableHighAccuracy: true }, (p) => {
+            if (p?.coords) setLoc({ ll: [p.coords.latitude, p.coords.longitude], source: "gps" });
+          });
+          watch.current = id;
+          return;
+        } else {
+          setPerm("denied");
+          return;
+        }
+      } catch (err) {
+        setPerm("denied");
+        return;
+      }
+    }
+
     if (!navigator.geolocation) return setPerm("denied");
-    if (watch.current !== null) navigator.geolocation.clearWatch(watch.current);
+    if (watch.current !== null) navigator.geolocation.clearWatch(Number(watch.current));
     watch.current = navigator.geolocation.watchPosition(
       p => { setPerm("granted"); setLoc({ ll: [p.coords.latitude, p.coords.longitude], source: "gps" }); },
       e => { if (e.code === e.PERMISSION_DENIED) setPerm("denied"); },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
     );
   }, []);
+
   useEffect(() => {
     setLoc(l => l.source === "gps" ? l : { ll: fallback, source: "city" });
-    // Ask on launch: start immediately if already allowed, otherwise show our explainer first.
+
+    if (Capacitor.isNativePlatform()) {
+      Geolocation.checkPermissions().then(status => {
+        if (status.location === "granted") { setPerm("granted"); start(); } 
+        else { setPerm("prompt"); }
+      }).catch(() => setPerm("prompt"));
+      return () => { if (watch.current) Geolocation.clearWatch({ id: String(watch.current) }); };
+    }
+
     navigator.permissions?.query({ name: "geolocation" }).then(r => {
       setPerm(r.state as GeoState);
       if (r.state === "granted") start();
       r.onchange = () => { setPerm(r.state as GeoState); if (r.state === "granted") start(); };
     }).catch(() => setPerm("prompt"));
-    return () => { if (watch.current !== null) navigator.geolocation.clearWatch(watch.current); };
-  }, [city, start]);
+
+    return () => { if (watch.current !== null) navigator.geolocation.clearWatch(Number(watch.current)); };
+  }, [city, start, fallback]);
+
   return { loc, perm, request: start };
 }
 
@@ -749,7 +811,14 @@ function MainApp({ t, lang, setLang, me, setMe, logout }: { t: Dict; lang: Lang;
     const ping = () => api("/ping", { method: "POST" }).catch(() => {});
     ping(); const x = setInterval(ping, 60000);
     window.addEventListener("pagehide", ping);
-    try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission()?.catch?.(() => {}); } catch { /* unsupported */ }
+    try { if (Capacitor.isNativePlatform()) {
+      LocalNotifications.requestPermissions().catch(() => {});
+      PushNotifications.requestPermissions().then(result => {
+        if (result.receive === "granted") PushNotifications.register();
+      }).catch(() => {});
+    } else {
+      try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission()?.catch?.(() => {}); } catch { /* unsupported */ }
+    }
     return () => { supabase.removeChannel(inbox); supabase.removeChannel(presence); clearInterval(x); window.removeEventListener("pagehide", ping); ping(); };
   }, [me.id, refresh]);
 
