@@ -27,3 +27,22 @@ body { overflow: hidden; -webkit-text-size-adjust: 100%; }
 .safe-bottom { bottom: calc(1rem + env(safe-area-inset-bottom)); }
 .safe-pad { padding-bottom: calc(7rem + env(safe-area-inset-bottom)); }
 @media (max-width: 639px) { input, select, textarea { font-size: 16px !important; } }
+
+/* Dark mode: swap the palette tokens; dark "ink" cards stay dark and white surfaces become charcoal. */
+html.dark {
+  --color-cream: #12100e;
+  --color-ink: #f3efe8;
+  --color-line: #2e2924;
+  --color-flame-soft: #3b2215;
+  color-scheme: dark;
+}
+html.dark body { background: #000; }
+html.dark .bg-white { background-color: #221e1a; }
+html.dark .bg-white\/95, html.dark .bg-white\/60 { background-color: rgb(34 30 26 / .92); }
+html.dark .bg-ink { background-color: #2b2621; }
+html.dark .text-white { color: #fff; }
+html.dark .bg-ink.text-white, html.dark .bg-ink .text-white { color: #fff; }
+html.dark .ring-cream { --tw-ring-color: #12100e; }
+html.dark input::placeholder, html.dark textarea::placeholder { color: rgb(243 239 232 / .3); }
+html.dark select option { background: #221e1a; color: #f3efe8; }
+html.dark .leaflet-container { background: #1f1c19; }

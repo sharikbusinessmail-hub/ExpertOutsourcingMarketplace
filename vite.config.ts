@@ -34,6 +34,8 @@ react(),
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
+      // The preview is served through an HTTPS proxy on 443; connect HMR there instead of the internal port.
+      hmr: { clientPort: 443 },
       watch: {
         ignored: [
           '**/.figma/**',

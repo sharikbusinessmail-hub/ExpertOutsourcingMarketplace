@@ -15,7 +15,7 @@ const sb = createClient(URL_, SERVICE);
 const P = "/make-server-5628dc9d";
 const BUCKET = "make-5628dc9d-avatars";
 const JOB_BUCKET = "make-5628dc9d-job-photos";
-const EXPERT_CATS = ["it", "hw", "mk", "ac", "bf", "el", "ds", "ed", "au"];
+const EXPERT_CATS = ["it", "hw", "mk", "ac", "bf", "el", "ds", "ed", "au", "av"];
 
 async function ensureBucket(name = BUCKET) {
   const { data } = await sb.storage.listBuckets();
@@ -72,10 +72,12 @@ async function loadProfile(user: any) {
     p = all.find(v => v && typeof v === "object" && v.name && (v.id === user.id || v.userId === user.id || (v.email && v.email === user.email))) ?? null;
   }
   const meta = user.user_metadata ?? {};
+  const fresh = !p;
   p = {
     role: "both", level: "casual", skills: [], years: 0, nic: "", bio: "", phone: "", address: "", avatarPath: "",
     ...(p ?? {}), id: user.id, email: user.email, name: p?.name ?? meta.name ?? user.email.split("@")[0], city: p?.city ?? meta.city ?? "Colombo", lastSeen: now(),
   };
+  if (fresh) p.onboarded = false;
   p.verified = p.level === "skilled" && !!p.nic && p.skills?.length > 0;
   await kv.set(`profile:${user.id}`, p);
   return p;
@@ -99,8 +101,11 @@ const decodeImage = (data: unknown) => {
   if (!m) return null;
   return { type: m[1], ext: m[1].split("/")[1].replace("jpeg", "jpg"), bytes: Uint8Array.from(atob(m[2]), ch => ch.charCodeAt(0)) };
 };
+// A CV counts as complete when the core sections an employer needs are filled in.
+const cvDone = (p: any) => { const v = p?.cv ?? {}; return !!(v.headline && v.summary && v.education?.length && v.work?.length && v.languages); };
+const yearsFor = (p: any, cat: string) => Number(p?.skillYears?.[cat] ?? p?.years) || 0;
 // Who hears about a job: skill match for expert categories, same-city earners for odd jobs.
-const matches = (p: any, job: any) => !!p && p.id !== job.ownerId && p.role !== "hire" &&
+const matches = (p: any, job: any) => !!p && p.id !== job.ownerId && p.role !== "hire" && (!job.cvRequired || cvDone(p)) && yearsFor(p, job.cat) >= (job.minYears ?? 0) &&
   (EXPERT_CATS.includes(job.cat) ? p.level === "skilled" && !!p.skills?.includes(job.cat) : p.city === job.city || job.remote);
 
 // Attach a signed avatar URL.
@@ -131,6 +136,94 @@ async function broadcast(topic: string, event: string, payload: unknown) {
     });
   } catch (e) { console.log("broadcast failed", topic, e); }
 }
+
+/* ---------- Make.com / Claude automation ---------- */
+// Outbound: every event is POSTed to the Make scenario webhook (if configured).
+async function automation(event: string, data: unknown) {
+  const hook = (Deno.env.get("MAKE_WEBHOOK_URL") ?? "").trim();
+  if (!hook) { console.log("automation skipped: MAKE_WEBHOOK_URL not set", event); return { ok: false, status: 0, body: "MAKE_WEBHOOK_URL is not set on the edge function" }; }
+  try {
+    const r = await fetch(hook, { method: "POST", headers: { "Content-Type": "application/json", "x-atha-secret": Deno.env.get("AUTOMATION_SECRET") ?? "" }, body: JSON.stringify({ event, at: now(), data }) });
+    const body = (await r.text()).slice(0, 300);
+    console.log("automation", event, r.status, body);
+    return { ok: r.ok, status: r.status, body };
+  } catch (e) { console.log("automation webhook failed", event, e); return { ok: false, status: 0, body: String(e) }; }
+}
+// Lets a signed-in user check the Make connection from the app.
+app.post(`${P}/automation/ping`, async c => {
+  const id = await authed(c); if (!id) return c.json({ error: "Unauthorized" }, 401);
+  const hook = (Deno.env.get("MAKE_WEBHOOK_URL") ?? "").trim();
+  const res = await automation("test.ping", { from: id, note: "Connection test from atha" });
+  return c.json({ ...res, hook: hook ? hook.slice(0, 32) + "…" : "", secretSet: !!Deno.env.get("AUTOMATION_SECRET") });
+});
+// Inbound: Make writes Claude's results back with the shared secret.
+const fromMake = (c: any) => { const s = Deno.env.get("AUTOMATION_SECRET"); return !!s && c.req.header("x-atha-secret") === s; };
+
+app.post(`${P}/automation/jobs/:id/scope`, async c => {
+  if (!fromMake(c)) return c.json({ error: "Forbidden" }, 403);
+  const job = await kv.get(`job:${c.req.param("id")}`); if (!job) return c.json({ error: "Job not found" }, 404);
+  const b = await c.req.json();
+  job.sow = { summary: String(b.summary ?? ""), deliverables: (b.deliverables ?? []).map(String), skills: (b.skills ?? []).map(String), estimate: String(b.estimate ?? ""), at: now() };
+  await kv.set(`job:${job.id}`, job);
+  await notify(job.ownerId, { kind: "job", jobId: job.id, title: "AI scope ready", body: `We structured "${job.title}" into a statement of work.` });
+  return c.json({ ok: true });
+});
+app.post(`${P}/automation/bids/:jobId/:bidId/summary`, async c => {
+  if (!fromMake(c)) return c.json({ error: "Forbidden" }, 403);
+  const key = `bid:${c.req.param("jobId")}:${c.req.param("bidId")}`;
+  const bid = await kv.get(key); if (!bid) return c.json({ error: "Bid not found" }, 404);
+  const b = await c.req.json();
+  bid.ai = { fit: String(b.fit ?? ""), score: Math.max(0, Math.min(100, Number(b.score) || 0)), flags: (b.flags ?? []).map(String), at: now() };
+  await kv.set(key, bid);
+  return c.json({ ok: true });
+});
+app.post(`${P}/automation/disputes/:id/summary`, async c => {
+  if (!fromMake(c)) return c.json({ error: "Forbidden" }, 403);
+  const d = await kv.get(`dispute:${c.req.param("id")}`); if (!d) return c.json({ error: "Dispute not found" }, 404);
+  const b = await c.req.json();
+  d.ai = { summary: String(b.summary ?? ""), clientView: String(b.clientView ?? ""), expertView: String(b.expertView ?? ""), recommendation: String(b.recommendation ?? ""), at: now() };
+  d.status = "review"; await kv.set(`dispute:${d.id}`, d);
+  return c.json({ ok: true });
+});
+
+// Signup email sanity check: syntax, throwaway domains, and a real mail server (MX) for the domain.
+const DISPOSABLE = ["mailinator.com", "guerrillamail.com", "10minutemail.com", "tempmail.com", "temp-mail.org", "yopmail.com", "trashmail.com", "getnada.com", "sharklasers.com", "dispostable.com", "maildrop.cc", "throwawaymail.com", "fakeinbox.com", "mintemail.com", "emailondeck.com", "mohmal.com", "tempail.com", "burnermail.io", "moakt.com", "spamgourmet.com"];
+app.post(`${P}/check-email`, async c => {
+  const email = String((await c.req.json()).email ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(email)) return c.json({ ok: false, reason: "That email address doesn't look right." });
+  const domain = email.split("@")[1];
+  if (DISPOSABLE.some(d => domain === d || domain.endsWith("." + d))) return c.json({ ok: false, reason: "Temporary email addresses aren't allowed. Please use your real email." });
+  try {
+    const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=MX`, { headers: { accept: "application/dns-json" } });
+    const j = await r.json();
+    if (j.Status === 3 || !(j.Answer ?? []).some((a: any) => a.type === 15)) return c.json({ ok: false, reason: `${domain} can't receive email. Check for typos (e.g. gmail.com).` });
+  } catch (e) { console.log("MX lookup failed", domain, e); }
+  return c.json({ ok: true });
+});
+
+app.get(`${P}/categories`, async c => {
+  const list = (await kv.getByPrefix("customcat:")).sort((a, b) => b.uses - a.uses);
+  return c.json({ categories: list });
+});
+
+// Either party on a hired job can open a dispute; Make gathers brief + chat for Claude.
+app.post(`${P}/jobs/:id/dispute`, async c => {
+  const id = await authed(c); if (!id) return c.json({ error: "Unauthorized" }, 401);
+  const job = await kv.get(`job:${c.req.param("id")}`);
+  if (!job || (job.ownerId !== id && job.assigneeId !== id)) return c.json({ error: "Only the client or hired expert can open a dispute." }, 403);
+  if (!["assigned", "done"].includes(job.status)) return c.json({ error: "Disputes are for hired or completed jobs." }, 400);
+  const b = await c.req.json();
+  const dispute = { id: uid(), jobId: job.id, openedBy: id, reason: String(b.reason ?? "").slice(0, 2000), evidence: (b.evidence ?? []).map(String), status: "open", created: now() };
+  await kv.set(`dispute:${dispute.id}`, dispute);
+  job.disputeId = dispute.id; await kv.set(`job:${job.id}`, job);
+  const { data: rows } = await sb.from("atha_chats").select("id").eq("job_id", job.id).contains("members", [job.ownerId, job.assigneeId].filter(Boolean));
+  let messages: any[] = [];
+  if (rows?.length) messages = (await sb.from("atha_messages").select("sender,body,created_at").in("chat_id", rows.map((r: any) => r.id)).order("created_at")).data ?? [];
+  await automation("dispute.opened", { dispute, job, messages });
+  const other = id === job.ownerId ? job.assigneeId : job.ownerId;
+  if (other) await notify(other, { kind: "job", jobId: job.id, title: "Dispute opened", body: `On "${job.title}". An admin will review it.` });
+  return c.json({ dispute });
+});
 
 app.get(`${P}/health`, c => c.json({ status: "ok" }));
 
@@ -185,10 +278,23 @@ app.post(`${P}/jobs/matches`, async c => {
 app.put(`${P}/profile`, async c => {
   const user = await authUser(c); if (!user) return c.json({ error: "Unauthorized" }, 401);
   const id = user.id; const old = await loadProfile(user); const b = await c.req.json();
-  const keep = ["name", "phone", "city", "address", "role", "level", "skills", "years", "nic", "bio"];
+  const keep = ["name", "phone", "city", "address", "role", "level", "skills", "years", "nic", "bio", "cv", "isOrg", "orgName", "onboarded", "home", "skillYears"];
   const p = { ...old };
   for (const k of keep) if (b[k] !== undefined) p[k] = b[k];
   p.verified = p.level === "skilled" && !!p.nic && p.skills?.length > 0;
+  p.phoneVerified = !!user.phone_confirmed_at;
+  // Typed-in skills ("x-<slug>") join the shared category list; overall years = most experienced skill.
+  if (b.skillNames && typeof b.skillNames === "object") for (const [cid, name] of Object.entries(b.skillNames)) {
+    if (!cid.startsWith("x-") || !p.skills?.includes(cid)) continue;
+    const slug = cid.slice(2), prev = await kv.get(`customcat:${slug}`);
+    if (!prev) await kv.set(`customcat:${slug}`, { id: cid, name: String(name).slice(0, 30), uses: 0, created: now() });
+  }
+  if (p.skillYears && typeof p.skillYears === "object") {
+    const ys = Object.entries(p.skillYears).filter(([k]) => p.skills?.includes(k)).map(([, v]) => Number(v) || 0);
+    p.skillYears = Object.fromEntries(Object.entries(p.skillYears).filter(([k]) => p.skills?.includes(k)).map(([k, v]) => [k, Math.max(0, Math.min(60, Number(v) || 0))]));
+    if (ys.length) p.years = Math.max(...ys);
+  }
+  if (user.phone) p.phone = user.phone;
   await kv.set(`profile:${id}`, p);
   return c.json({ profile: await withAvatar(p) });
 });
@@ -245,7 +351,12 @@ app.post(`${P}/jobs`, async c => {
   const me = await kv.get(`profile:${id}`);
   if (me.role === "earn") return c.json({ error: "Expert-only accounts can't post jobs." }, 403);
   const b = await c.req.json();
-  const job: any = { id: uid(), ownerId: id, poster: me.name, cat: b.cat, title: b.title, desc: b.desc ?? "", city: b.city, place: b.place ?? "", price: Number(b.price), ll: b.ll, remote: !!b.remote, status: "open", created: now(),
+  if (!(Number(b.price) > 0)) return c.json({ error: "Salary must be a number above 0." }, 400);
+  if (b.kind === "odd" && EXPERT_CATS.includes(b.cat)) return c.json({ error: "That category needs skilled experts. Choose an odd-job category." }, 400);
+  const job: any = { id: uid(), ownerId: id, poster: me.isOrg && me.orgName ? me.orgName : me.name, cat: b.cat, title: b.title, desc: b.desc ?? "", city: b.city, place: b.place ?? "", price: Number(b.price), ll: b.ll, remote: !!b.remote, status: "open", created: now(),
+    kind: b.kind === "odd" ? "odd" : "skilled",
+    minYears: b.kind === "odd" ? 0 : Math.max(0, Number(b.minYears) || 0), catName: "",
+    negotiable: b.kind !== "odd" && !!b.negotiable, org: !!me.isOrg, cvRequired: !!me.isOrg,
     priority: ["urgent", "high", "medium", "low"].includes(b.priority) ? b.priority : "medium", photoPaths: [] as string[] };
   // Up to 3 snapshots, stored in the dedicated job-photos bucket (not the avatar bucket).
   const photos: unknown[] = (Array.isArray(b.photos) ? b.photos : b.photo ? [b.photo] : []).slice(0, 3);
@@ -259,7 +370,17 @@ app.post(`${P}/jobs`, async c => {
     if (error) return c.json({ error: `Photo upload failed: ${error.message}` }, 500);
     job.photoPaths.push(path);
   }
+  // "Other" category: save the new name so future posters can pick it.
+  if (b.cat === "other" || String(b.cat).startsWith("x-")) {
+    const name = String(b.catName ?? "").trim().slice(0, 40);
+    const slug = String(b.cat).startsWith("x-") ? String(b.cat).slice(2) : name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!slug) return c.json({ error: "Name your category." }, 400);
+    const prev = await kv.get(`customcat:${slug}`);
+    await kv.set(`customcat:${slug}`, { id: `x-${slug}`, name: prev?.name ?? name, uses: (prev?.uses ?? 0) + 1, created: prev?.created ?? now() });
+    job.cat = `x-${slug}`; job.catName = prev?.name ?? name;
+  }
   await kv.set(`job:${job.id}`, job);
+  await automation("job.created", { job, poster: { id: me.id, name: me.name, isOrg: !!me.isOrg } });
   // Alert matching experts right away.
   const experts = (await kv.getByPrefix("profile:")).filter(p => matches(p, job));
   await Promise.all(experts.map(async p => {
@@ -282,7 +403,10 @@ app.get(`${P}/jobs/:id/bids`, async c => {
   if (!job || job.ownerId !== id) return c.json({ error: "Not your job" }, 403);
   const bids = await kv.getByPrefix(`bid:${job.id}:`);
   const people = await profiles(bids.map(b => b.expertId));
-  return c.json({ bids: bids.map(b => ({ ...b, avatar: people[b.expertId]?.avatar ?? "", name: people[b.expertId]?.name ?? b.name })) });
+  const full = await kv.mget(bids.map(b => `profile:${b.expertId}`));
+  const cvOf: Record<string, any> = {};
+  for (const p of full) if (p) cvOf[p.id] = { cv: p.cv ?? null, bio: p.bio, skills: p.skills, level: p.level, years: p.years, phone: job.org ? p.phone : undefined, email: job.org ? p.email : undefined, cvComplete: cvDone(p) };
+  return c.json({ bids: bids.map(b => ({ ...b, applicant: cvOf[b.expertId] ?? null, avatar: people[b.expertId]?.avatar ?? "", name: people[b.expertId]?.name ?? b.name })) });
 });
 app.post(`${P}/jobs/:id/bids`, async c => {
   const id = await authed(c); if (!id) return c.json({ error: "Unauthorized" }, 401);
@@ -292,11 +416,15 @@ app.post(`${P}/jobs/:id/bids`, async c => {
   const me = await kv.get(`profile:${id}`);
   if (me.role === "hire") return c.json({ error: "Switch your role to Earn or Both to bid." }, 403);
   if (EXPERT_CATS.includes(job.cat) && !(me.level === "skilled" && me.skills?.includes(job.cat) && me.nic)) return c.json({ error: "This category needs a verified skilled profile." }, 403);
+  if (yearsFor(me, job.cat) < (job.minYears ?? 0)) return c.json({ error: `This job needs at least ${job.minYears} years of experience.` }, 403);
+  if (job.cvRequired && !cvDone(me)) return c.json({ error: "This organisation only accepts applicants with a complete CV. Fill it in under Me → CV." }, 403);
   const existing = (await kv.getByPrefix(`bid:${job.id}:`)).find(b => b.expertId === id);
   const b = await c.req.json();
-  const bid = { id: existing?.id ?? uid(), jobId: job.id, expertId: id, name: me.name, city: me.city, years: me.years, verified: me.verified, labour: Number(b.labour) || 0, mat: Number(b.mat) || 0, note: b.note ?? "", status: "pending", created: now() };
+  const bid = { id: existing?.id ?? uid(), jobId: job.id, expertId: id, name: me.name, city: me.city, years: me.years, verified: me.verified, labour: Number(b.labour) || 0, mat: Number(b.mat) || 0, note: b.note ?? "", negotiable: !!b.negotiable, salary: Number(b.salary) || 0,
+    from: { city: String(b.fromCity ?? me.city ?? ""), area: String(b.fromArea ?? ""), ll: Array.isArray(b.fromLl) ? b.fromLl.slice(0, 2).map(Number) : null, source: b.fromSource === "gps" ? "gps" : "city" }, status: "pending", created: now() };
   await kv.set(`bid:${job.id}:${bid.id}`, bid);
-  await notify(job.ownerId, { kind: "bid", jobId: job.id, title: `New bid from ${me.name}`, body: `Rs ${(bid.labour + bid.mat).toLocaleString()} on "${job.title}"` });
+  await automation("bid.created", { job, bid, expert: { id: me.id, name: me.name, years: me.years, skills: me.skills, bio: me.bio, cv: me.cv ?? null, verified: me.verified } });
+  await notify(job.ownerId, { kind: "bid", jobId: job.id, title: job.org ? `New application from ${me.name}` : `New bid from ${me.name}`, body: `${job.org && bid.salary ? `Expects Rs ${bid.salary.toLocaleString()}` : `Rs ${(bid.labour + bid.mat).toLocaleString()}`} on "${job.title}"` });
   return c.json({ bid });
 });
 app.get(`${P}/bids/mine`, async c => {
@@ -390,6 +518,28 @@ app.post(`${P}/chats/:id/messages`, async c => {
   return c.json({ message: msg });
 });
 
+// Senders can delete their own messages; anyone in the chat can report the other person's.
+app.delete(`${P}/chats/:id/messages/:mid`, async c => {
+  const id = await authed(c); if (!id) return c.json({ error: "Unauthorized" }, 401);
+  const row = await memberChat(c.req.param("id"), id); if (!row) return c.json({ error: "Chat not found" }, 404);
+  const { data, error } = await sb.from("atha_messages").delete().eq("id", c.req.param("mid")).eq("chat_id", row.id).eq("sender", id).select("id");
+  if (error) return c.json({ error: error.message }, 500);
+  if (!data?.length) return c.json({ error: "You can only delete your own messages." }, 403);
+  await broadcast(`chat:${row.id}`, "del", { id: c.req.param("mid") });
+  return c.json({ ok: true });
+});
+app.post(`${P}/chats/:id/messages/:mid/report`, async c => {
+  const id = await authed(c); if (!id) return c.json({ error: "Unauthorized" }, 401);
+  const row = await memberChat(c.req.param("id"), id); if (!row) return c.json({ error: "Chat not found" }, 404);
+  const { data: m } = await sb.from("atha_messages").select("*").eq("id", c.req.param("mid")).eq("chat_id", row.id).maybeSingle();
+  if (!m) return c.json({ error: "Message not found" }, 404);
+  if (m.sender === id) return c.json({ error: "You can't report your own message." }, 400);
+  const b = await c.req.json().catch(() => ({}));
+  const report = { id: uid(), chatId: row.id, messageId: m.id, text: m.body, sender: m.sender, reportedBy: id, reason: String(b.reason ?? "other").slice(0, 300), status: "open", created: now() };
+  await kv.set(`report:${report.id}`, report);
+  await automation("message.reported", report);
+  return c.json({ ok: true });
+});
 app.put(`${P}/chats/:id/read`, async c => {
   const id = await authed(c); if (!id) return c.json({ error: "Unauthorized" }, 401);
   const row = await memberChat(c.req.param("id"), id); if (!row) return c.json({ error: "Chat not found" }, 404);
