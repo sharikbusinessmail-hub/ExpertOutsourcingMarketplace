@@ -1,0 +1,84 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 1. Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 2. Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 3. Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: 4. Set up Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 5. Install Web Dependencies & Capacitor
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm add @capacitor/core @capacitor/android @capacitor/geolocation @capacitor/local-notifications @capacitor/push-notifications
+          pnpm add -D @capacitor/cli @capacitor/assets
+          pnpm run build
+
+      - name: 6. Initialize Capacitor & Android Platform
+        run: |
+          if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ]; then
+            npx cap init "Atha" "com.atha.marketplace" --web-dir dist
+          fi
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: 7. Generate App Icons
+        run: npx @capacitor/assets generate
+
+      - name: 8. Inject GPS & Notification Permissions safely
+        run: |
+          cat << 'EOF' > inject-perms.cjs
+          const fs = require('fs');
+          const file = 'android/app/src/main/AndroidManifest.xml';
+          
+          if (fs.existsSync(file)) {
+            let xml = fs.readFileSync(file, 'utf8');
+            if (!xml.includes('android.permission.ACCESS_FINE_LOCATION')) {
+              const perms = `
+                  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+                  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+                  <uses-feature android:name="android.hardware.location.gps" />
+                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              `;
+              xml = xml.replace('</manifest>', perms + '\n</manifest>');
+              fs.writeFileSync(file, xml);
+            }
+          }
+          EOF
+          node inject-perms.cjs
+
+      - name: 9. Compile Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: 10. Upload Downloadable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Atha-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
