@@ -47,7 +47,9 @@ jobs:
           npx cap sync android
 
       - name: 7. Generate App Icons
-        run: npx @capacitor/assets generate
+        run: |
+          npm install --platform=linux --arch=x64 sharp
+          npx @capacitor/assets generate
 
       - name: 8. Inject GPS & Notification Permissions safely
         run: |
