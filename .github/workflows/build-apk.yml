@@ -48,7 +48,9 @@ jobs:
 
       - name: 7. Generate App Icons
         run: |
-          pnpm add -D sharp
+          pnpm config set ignore-scripts false
+          pnpm add -D @capacitor/assets sharp
+          pnpm rebuild sharp
           npx @capacitor/assets generate
 
       - name: 8. Inject GPS & Notification Permissions safely
