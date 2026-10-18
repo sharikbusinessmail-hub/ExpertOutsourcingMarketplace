@@ -48,7 +48,7 @@ jobs:
 
       - name: 7. Generate App Icons
         run: |
-          npm install --platform=linux --arch=x64 sharp
+          pnpm add -D sharp
           npx @capacitor/assets generate
 
       - name: 8. Inject GPS & Notification Permissions safely
