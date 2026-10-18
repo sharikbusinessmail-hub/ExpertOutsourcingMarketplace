@@ -805,13 +805,18 @@ function MainApp({ t, lang, setLang, me, setMe, logout }: { t: Dict; lang: Lang;
       if (n.kind !== "msg") refresh();
       if (n.kind === "job" || document.hidden) systemNotify(n.title, n.body);
     }).subscribe();
+    
     const presence = supabase.channel("online", { config: { presence: { key: me.id } } });
     presence.on("presence", { event: "sync" }, () => setOnline(new Set(Object.keys(presence.presenceState()))))
       .subscribe(s => { if (s === "SUBSCRIBED") presence.track({ at: new Date().toISOString() }); });
+      
     const ping = () => api("/ping", { method: "POST" }).catch(() => {});
-    ping(); const x = setInterval(ping, 60000);
+    ping(); 
+    const x = setInterval(ping, 60000);
     window.addEventListener("pagehide", ping);
-    try { if (Capacitor.isNativePlatform()) {
+    
+    // Native Push Notification Prompts
+    if (Capacitor.isNativePlatform()) {
       LocalNotifications.requestPermissions().catch(() => {});
       PushNotifications.requestPermissions().then(result => {
         if (result.receive === "granted") PushNotifications.register();
@@ -819,7 +824,14 @@ function MainApp({ t, lang, setLang, me, setMe, logout }: { t: Dict; lang: Lang;
     } else {
       try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission()?.catch?.(() => {}); } catch { /* unsupported */ }
     }
-    return () => { supabase.removeChannel(inbox); supabase.removeChannel(presence); clearInterval(x); window.removeEventListener("pagehide", ping); ping(); };
+
+    return () => { 
+      supabase.removeChannel(inbox); 
+      supabase.removeChannel(presence); 
+      clearInterval(x); 
+      window.removeEventListener("pagehide", ping); 
+      ping(); 
+    };
   }, [me.id, refresh]);
 
   // Experts see others' jobs: within 30 km by GPS, or in their city when GPS is unavailable. Remote jobs always show.
