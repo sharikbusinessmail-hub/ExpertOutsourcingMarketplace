@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: 1. Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: 2. Install pnpm
         uses: pnpm/action-setup@v4
