@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "264799161378",
+    "project_id": "atha-dea1e",
+    "storage_bucket": "atha-dea1e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:264799161378:android:4b0735f822cbd3fb4a4e7b",
+        "android_client_info": {
+          "package_name": "com.atha.marketplace"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBdLtNAfFm9My6lRMRCrOs9l2R4eMU80is"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
