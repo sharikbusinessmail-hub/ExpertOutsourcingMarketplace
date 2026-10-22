@@ -47,6 +47,9 @@ jobs:
             npx cap add android
           fi
           npx cap sync android
+          
+          # Inject the Firebase configuration into the Android app folder
+          cp google-services.json android/app/
 
       - name: 7. Generate App Icons
         run: |
